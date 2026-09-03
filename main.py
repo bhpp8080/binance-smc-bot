@@ -5,14 +5,13 @@ import hashlib
 import requests
 import pandas as pd
 
-# Global Settings
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
 BASE_URL = "https://testnet.binancefuture.com"
 SYMBOL = "BTCUSDT"
-TIMEFRAME = "3m"             # 3m/5m टाईमफ्रेम जलद ट्रेडिंगसाठी
-RISK_PER_TRADE_USDT = 10.0  # प्रत्येक ट्रेडवर नक्की $10 ची रिस्क
-RR_RATIO = 2.0               # Risk to Reward 1:2
+TIMEFRAME = "3m"
+RISK_PER_TRADE_USDT = 10.0
+RR_RATIO = 2.0
 
 def send_signed_request(method, endpoint, params={}):
     params['timestamp'] = int(time.time() * 1000)
@@ -54,11 +53,9 @@ def check_signal(df):
     curr_lower = df.iloc[-1]['lower_band']
     curr_upper = df.iloc[-1]['upper_band']
     
-    # ta.crossover(close, lower) -> Long Entry
     if prev_close <= prev_lower and curr_close > curr_lower:
         return "BUY", curr_close, curr_lower
     
-    # ta.crossunder(close, upper) -> Short Entry
     if prev_close >= prev_upper and curr_close < curr_upper:
         return "SELL", curr_close, curr_upper
         
@@ -69,60 +66,45 @@ def execute_trade(side, entry_price, band_price):
         sl_price = round(band_price, 2)
         sl_distance = entry_price - sl_price
         if sl_distance <= 0:
-            sl_distance = entry_price * 0.005  # Safety fallback 0.5%
+            sl_distance = entry_price * 0.005
             sl_price = round(entry_price - sl_distance, 2)
             
         tp_price = round(entry_price + (sl_distance * RR_RATIO), 2)
         qty = round(RISK_PER_TRADE_USDT / sl_distance, 3)
         exit_side = "SELL"
         
-    else:  # SELL (SHORT)
+    else:
         sl_price = round(band_price, 2)
         sl_distance = sl_price - entry_price
         if sl_distance <= 0:
-            sl_distance = entry_price * 0.005  # Safety fallback 0.5%
+            sl_distance = entry_price * 0.005
             sl_price = round(entry_price + sl_distance, 2)
             
         tp_price = round(entry_price - (sl_distance * RR_RATIO), 2)
         qty = round(RISK_PER_TRADE_USDT / sl_distance, 3)
         exit_side = "BUY"
 
-    # Minimal lot size check
     if qty < 0.001:
         qty = 0.001
 
     print(f"🎯 Executing {side} Order:")
     print(f"  Entry Price: {entry_price}")
-    print(f"  Quantity: {qty} BTC (Calculated for $10 Risk)")
+    print(f"  Quantity: {qty} BTC")
     print(f"  Stop Loss: {sl_price}")
     print(f"  Take Profit (1:2 RR): {tp_price}")
 
-    # 1. Main Market Order
     market_order = send_signed_request("POST", "/fapi/v1/order", {
-        "symbol": SYMBOL,
-        "side": side,
-        "type": "MARKET",
-        "quantity": qty
+        "symbol": SYMBOL, "side": side, "type": "MARKET", "quantity": qty
     })
     print("📌 Market Order Result:", market_order)
 
-    # 2. Stop Loss Order
     sl_order = send_signed_request("POST", "/fapi/v1/order", {
-        "symbol": SYMBOL,
-        "side": exit_side,
-        "type": "STOP_MARKET",
-        "stopPrice": sl_price,
-        "closePosition": "true"
+        "symbol": SYMBOL, "side": exit_side, "type": "STOP_MARKET", "stopPrice": sl_price, "closePosition": "true"
     })
     print("🛡️ Stop Loss Order Result:", sl_order)
 
-    # 3. Take Profit Order
     tp_order = send_signed_request("POST", "/fapi/v1/order", {
-        "symbol": SYMBOL,
-        "side": exit_side,
-        "type": "TAKE_PROFIT_MARKET",
-        "stopPrice": tp_price,
-        "closePosition": "true"
+        "symbol": SYMBOL, "side": exit_side, "type": "TAKE_PROFIT_MARKET", "stopPrice": tp_price, "closePosition": "true"
     })
     print("🎯 Take Profit Order Result:", tp_order)
 

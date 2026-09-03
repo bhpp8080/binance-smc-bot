@@ -13,7 +13,9 @@ TIMEFRAME = "3m"
 RISK_PER_TRADE_USDT = 10.0
 RR_RATIO = 2.0
 
-def send_signed_request(method, endpoint, params={}):
+def send_signed_request(method, endpoint, params=None):
+    if params is None:
+        params = {}
     params['timestamp'] = int(time.time() * 1000)
     query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
     signature = hmac.new(
@@ -31,14 +33,17 @@ def send_signed_request(method, endpoint, params={}):
         return requests.post(url, headers=headers).json()
 
 def has_open_position():
-    """अकाऊंटवर आधीपासूनच कोणती पोझिशन ओपन आहे का हे तपासते"""
-    res = send_signed_request("GET", "/fapi/v2/positionRisk")
-    if isinstance(res, list):
-        for pos in res:
-            if pos.get("symbol") == SYMBOL:
-                amt = float(pos.get("positionAmt", 0))
-                if amt != 0:
-                    return True
+    """अकाऊंटवर आधीपासून कोणतीही पोझिशन ओपन आहे का हे तपासते"""
+    try:
+        res = send_signed_request("GET", "/fapi/v2/positionRisk")
+        if isinstance(res, list):
+            for pos in res:
+                if pos.get("symbol") == SYMBOL:
+                    amt = float(pos.get("positionAmt", 0))
+                    if amt != 0:
+                        return True
+    except Exception as e:
+        print("⚠️ Position Check Error:", str(e))
     return False
 
 def get_klines():
@@ -62,7 +67,7 @@ def check_recent_signals(df):
     """
     closed_df = df.iloc[:-1].copy()
     
-    # मागील ५ कँडल्समध्ये सर्वात नवीन ट्रिगर झालेला सिग्नल शोधणे
+    # मागील ५ क्लोज्ड कँडल्समध्ये ट्रिगर झालेला नवीन सिग्नल शोधणे
     for i in range(len(closed_df) - 1, len(closed_df) - 6, -1):
         prev_close = closed_df.iloc[i-1]['close']
         prev_lower = closed_df.iloc[i-1]['lower_band']
@@ -121,18 +126,19 @@ def execute_trade(side, entry_price, band_price):
     })
     print("📌 Market Order Result:", market_order)
 
-    # Stop Loss
+    # Stop Loss Order
     sl_order = send_signed_request("POST", "/fapi/v1/order", {
         "symbol": SYMBOL, "side": exit_side, "type": "STOP_MARKET", "stopPrice": sl_price, "closePosition": "true"
     })
     print("🛡️ Stop Loss Order Result:", sl_order)
 
-    # Take Profit
+    # Take Profit Order
     tp_order = send_signed_request("POST", "/fapi/v1/order", {
         "symbol": SYMBOL, "side": exit_side, "type": "TAKE_PROFIT_MARKET", "stopPrice": tp_price, "closePosition": "true"
     })
     print("🎯 Take Profit Order Result:", tp_order)
 
+# Main Execution Flow
 print(f"🤖 Bollinger Bands Bot ({SYMBOL} {TIMEFRAME}) Running...")
 
 try:

@@ -233,15 +233,15 @@ def execute_trade(side, entry_price, sl_price, tp_price):
 
     exit_side = "SELL" if side == "BUY" else "BUY"
 
-    # Formatted prices for Binance API precision
-    sl_str = f"{sl_price:.2f}"
-    tp_str = f"{tp_price:.2f}"
+    # BTCUSDT साठी १ दशांश स्थळ (1 Decimal Place Precision)
+    sl_formatted = f"{round(sl_price, 1):.1f}"
+    tp_formatted = f"{round(tp_price, 1):.1f}"
 
     print(f"🎯 Executing {side} Order via SMC Volumetric Order Flow Engine:")
     print(f"  Entry Price: {entry_price}")
     print(f"  Quantity: {qty} BTC ($10 Risk Target)")
-    print(f"  Stop Loss: {sl_str}")
-    print(f"  Take Profit (1:2 RR): {tp_str}")
+    print(f"  Stop Loss: {sl_formatted}")
+    print(f"  Take Profit (1:2 RR): {tp_formatted}")
 
     # 1. Market Entry Order
     market_order = send_signed_request("POST", "/fapi/v1/order", {
@@ -252,23 +252,26 @@ def execute_trade(side, entry_price, sl_price, tp_price):
     })
     print("📌 Market Order Result:", market_order)
 
-    # 2. Stop Loss Order (Added workingType and string formatting)
+    # थोडे थांबून (0.5 sec) SL/TP ऑर्डर्स पाठवणे जेणेकरून एंट्री प्राईस कन्फर्म होईल
+    time.sleep(0.5)
+
+    # 2. Stop Loss Order
     sl_order = send_signed_request("POST", "/fapi/v1/order", {
         "symbol": SYMBOL,
         "side": exit_side,
         "type": "STOP_MARKET",
-        "stopPrice": sl_str,
+        "stopPrice": sl_formatted,
         "closePosition": "true",
         "workingType": "MARK_PRICE"
     })
     print("🛡️ Stop Loss Order Result:", sl_order)
 
-    # 3. Take Profit Order (Added workingType and string formatting)
+    # 3. Take Profit Order
     tp_order = send_signed_request("POST", "/fapi/v1/order", {
         "symbol": SYMBOL,
         "side": exit_side,
         "type": "TAKE_PROFIT_MARKET",
-        "stopPrice": tp_str,
+        "stopPrice": tp_formatted,
         "closePosition": "true",
         "workingType": "MARK_PRICE"
     })

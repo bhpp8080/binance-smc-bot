@@ -233,30 +233,46 @@ def execute_trade(side, entry_price, sl_price, tp_price):
 
     exit_side = "SELL" if side == "BUY" else "BUY"
 
+    # Formatted prices for Binance API precision
+    sl_str = f"{sl_price:.2f}"
+    tp_str = f"{tp_price:.2f}"
+
     print(f"🎯 Executing {side} Order via SMC Volumetric Order Flow Engine:")
     print(f"  Entry Price: {entry_price}")
     print(f"  Quantity: {qty} BTC ($10 Risk Target)")
-    print(f"  Stop Loss: {sl_price}")
-    print(f"  Take Profit (1:2 RR): {tp_price}")
+    print(f"  Stop Loss: {sl_str}")
+    print(f"  Take Profit (1:2 RR): {tp_str}")
 
-    # Market Order
+    # 1. Market Entry Order
     market_order = send_signed_request("POST", "/fapi/v1/order", {
-        "symbol": SYMBOL, "side": side, "type": "MARKET", "quantity": qty
+        "symbol": SYMBOL,
+        "side": side,
+        "type": "MARKET",
+        "quantity": qty
     })
     print("📌 Market Order Result:", market_order)
 
-    # Stop Loss Order
+    # 2. Stop Loss Order (Added workingType and string formatting)
     sl_order = send_signed_request("POST", "/fapi/v1/order", {
-        "symbol": SYMBOL, "side": exit_side, "type": "STOP_MARKET", "stopPrice": round(sl_price, 2), "closePosition": "true"
+        "symbol": SYMBOL,
+        "side": exit_side,
+        "type": "STOP_MARKET",
+        "stopPrice": sl_str,
+        "closePosition": "true",
+        "workingType": "MARK_PRICE"
     })
     print("🛡️ Stop Loss Order Result:", sl_order)
 
-    # Take Profit Order
+    # 3. Take Profit Order (Added workingType and string formatting)
     tp_order = send_signed_request("POST", "/fapi/v1/order", {
-        "symbol": SYMBOL, "side": exit_side, "type": "TAKE_PROFIT_MARKET", "stopPrice": round(tp_price, 2), "closePosition": "true"
+        "symbol": SYMBOL,
+        "side": exit_side,
+        "type": "TAKE_PROFIT_MARKET",
+        "stopPrice": tp_str,
+        "closePosition": "true",
+        "workingType": "MARK_PRICE"
     })
     print("🎯 Take Profit Order Result:", tp_order)
-
 # =====================================================================
 # MAIN RUNNER
 # =====================================================================

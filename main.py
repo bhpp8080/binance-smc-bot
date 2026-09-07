@@ -11,10 +11,12 @@ import numpy as np
 # =====================================================================
 API_KEY = os.getenv("BINANCE_API_KEY")
 API_SECRET = os.getenv("BINANCE_API_SECRET")
+
 BASE_URL = "https://testnet.binancefuture.com"
 SYMBOL = "BTCUSDT"
 RISK_PER_TRADE_USDT = 10.0
 RR_RATIO = 2.0
+MAX_OPEN_POSITIONS = 2  # एका वेळी जास्तीत जास्त २ ट्रेड्स अलाऊ केले जातील
 
 # =====================================================================
 # BINANCE API HELPERS
@@ -38,26 +40,27 @@ def send_signed_request(method, endpoint, params=None):
     elif method == "POST":
         return requests.post(url, headers=headers).json()
 
-def has_open_position():
-    """अकाऊंटवर आधीपासून पोझिशन चालू आहे का हे तपासते"""
+def get_open_positions_count():
+    """सध्या किती पोझिशन्स ओपन आहेत ते मोजते"""
     try:
         res = send_signed_request("GET", "/fapi/v2/positionRisk")
+        count = 0
         if isinstance(res, list):
             for pos in res:
                 if pos.get("symbol") == SYMBOL:
                     amt = float(pos.get("positionAmt", 0))
                     if amt != 0:
-                        return True
+                        count += 1
+        return count
     except Exception as e:
         print("⚠️ Position Check Error:", str(e))
-    return False
+        return 0
 
 def get_klines(interval, limit=50):
     url = f"{BASE_URL}/fapi/v1/klines?symbol={SYMBOL}&interval={interval}&limit={limit}"
     res = requests.get(url).json()
     df = pd.DataFrame(res, columns=['time', 'open', 'high', 'low', 'close', 'volume', '_', '_', '_', '_', '_', '_'])
     
-    # Capitalizing column names to match user's SMC script
     df['Open'] = df['open'].astype(float)
     df['High'] = df['high'].astype(float)
     df['Low'] = df['low'].astype(float)
@@ -66,12 +69,9 @@ def get_klines(interval, limit=50):
     return df[['time', 'Open', 'High', 'Low', 'Close']]
 
 # =====================================================================
-# AUTOMATED ORDER FLOW / ORDER BLOCK DETECTOR
+# AUTO ORDER FLOW DETECTOR
 # =====================================================================
 def auto_detect_ltf_obs(tf_list=['15m', '5m', '3m']):
-    """
-    15m, 5m, आणि 3m टाइमफ्रेमवरून आपोआप चालीव Bullish/Bearish Order Blocks शोधणे
-    """
     bullish_obs = []
     bearish_obs = []
 
@@ -80,10 +80,9 @@ def auto_detect_ltf_obs(tf_list=['15m', '5m', '3m']):
         if df.empty or len(df) < 5:
             continue
         
-        # Bullish OB: ब्रेकआऊटच्या आधीची शेवटची Red Candle
         for i in range(len(df) - 3, 2, -1):
-            if df.iloc[i]['Close'] < df.iloc[i]['Open']: # Red Candle
-                if df.iloc[i+1]['Close'] > df.iloc[i]['High']: # Breakout
+            if df.iloc[i]['Close'] < df.iloc[i]['Open']:
+                if df.iloc[i+1]['Close'] > df.iloc[i]['High']:
                     bullish_obs.append({
                         'tf': tf,
                         'top': float(df.iloc[i]['High']),
@@ -91,10 +90,9 @@ def auto_detect_ltf_obs(tf_list=['15m', '5m', '3m']):
                     })
                     break
 
-        # Bearish OB: ब्रेकडाऊनच्या आधीची शेवटची Green Candle
         for i in range(len(df) - 3, 2, -1):
-            if df.iloc[i]['Close'] > df.iloc[i]['Open']: # Green Candle
-                if df.iloc[i+1]['Close'] < df.iloc[i]['Low']: # Breakdown
+            if df.iloc[i]['Close'] > df.iloc[i]['Open']:
+                if df.iloc[i+1]['Close'] < df.iloc[i]['Low']:
                     bearish_obs.append({
                         'tf': tf,
                         'top': float(df.iloc[i]['High']),
@@ -105,7 +103,7 @@ def auto_detect_ltf_obs(tf_list=['15m', '5m', '3m']):
     return bullish_obs, bearish_obs
 
 # =====================================================================
-# SMC STRATEGY ENGINE (YOUR ALGORITHM)
+# SMC STRATEGY ENGINE
 # =====================================================================
 class SMCStrategyEngine:
     def __init__(self, rr_ratio=2.0):
@@ -119,9 +117,7 @@ class SMCStrategyEngine:
             return None, None
         tf_weights = {'3m': 1, '5m': 2, '15m': 3}
         sorted_obs = sorted(ltf_obs, key=lambda x: tf_weights.get(x['tf'], 99))
-        entry_ob = sorted_obs[0]
-        outer_ob = sorted_obs[-1]
-        return entry_ob, outer_ob
+        return sorted_obs[0], sorted_obs[-1]
 
     def evaluate_buy_setup(self, candles_df, ltf_obs):
         entry_ob, outer_ob = self.resolve_ltf_overlap(ltf_obs)
@@ -130,47 +126,35 @@ class SMCStrategyEngine:
 
         mt_level = self.calculate_mean_threshold(entry_ob['top'], entry_ob['bot'])
         sl_price = outer_ob['bot']
-        
         setup_tapped = False
         last_red_high = None
         
         for idx, row in candles_df.iterrows():
-            candle_open = row['Open']
-            candle_high = row['High']
-            candle_low = row['Low']
-            candle_close = row['Close']
-
-            if candle_low <= entry_ob['top'] and candle_close >= entry_ob['bot']:
+            if row['Low'] <= entry_ob['top'] and row['Close'] >= entry_ob['bot']:
                 setup_tapped = True
 
             if setup_tapped:
-                if candle_close < mt_level:
-                    return {"signal": "INVALIDATED", "reason": "Candle closed below 50% Mean Threshold"}
+                if row['Close'] < mt_level:
+                    return {"signal": "INVALIDATED", "reason": "Close below Mean Threshold"}
 
-                if candle_close < candle_open:
-                    last_red_high = candle_high
+                if row['Close'] < row['Open']:
+                    last_red_high = row['High']
 
-                if last_red_high is not None and candle_close > last_red_high:
-                    entry_price = candle_close
+                if last_red_high is not None and row['Close'] > last_red_high:
+                    entry_price = row['Close']
                     risk = entry_price - sl_price
-                    
                     if risk <= 0:
                         return {"signal": "INVALIDATED", "reason": "Invalid Risk Distance"}
 
-                    tp_price = entry_price + (risk * self.rr_ratio)
-                    
                     return {
                         "signal": "BUY_ENTRY",
                         "entry_time": row['time'],
                         "entry_price": entry_price,
                         "sl_price": sl_price,
-                        "tp_price": tp_price,
-                        "risk_points": risk,
-                        "entry_tf": entry_ob['tf'],
-                        "sl_tf": outer_ob['tf']
+                        "tp_price": entry_price + (risk * self.rr_ratio)
                     }
 
-        return {"signal": "WAITING_FOR_TRIGGER", "reason": "Conditions met, waiting for trigger"}
+        return {"signal": "WAITING_FOR_TRIGGER", "reason": "Waiting for trigger"}
 
     def evaluate_sell_setup(self, candles_df, ltf_obs):
         entry_ob, outer_ob = self.resolve_ltf_overlap(ltf_obs)
@@ -179,47 +163,35 @@ class SMCStrategyEngine:
 
         mt_level = self.calculate_mean_threshold(entry_ob['top'], entry_ob['bot'])
         sl_price = outer_ob['top']
-        
         setup_tapped = False
         last_green_low = None
         
         for idx, row in candles_df.iterrows():
-            candle_open = row['Open']
-            candle_high = row['High']
-            candle_low = row['Low']
-            candle_close = row['Close']
-
-            if candle_high >= entry_ob['bot'] and candle_close <= entry_ob['top']:
+            if row['High'] >= entry_ob['bot'] and row['Close'] <= entry_ob['top']:
                 setup_tapped = True
 
             if setup_tapped:
-                if candle_close > mt_level:
-                    return {"signal": "INVALIDATED", "reason": "Candle closed above 50% Mean Threshold"}
+                if row['Close'] > mt_level:
+                    return {"signal": "INVALIDATED", "reason": "Close above Mean Threshold"}
 
-                if candle_close > candle_open:
-                    last_green_low = candle_low
+                if row['Close'] > row['Open']:
+                    last_green_low = row['Low']
 
-                if last_green_low is not None and candle_close < last_green_low:
-                    entry_price = candle_close
+                if last_green_low is not None and row['Close'] < last_green_low:
+                    entry_price = row['Close']
                     risk = sl_price - entry_price
-                    
                     if risk <= 0:
                         return {"signal": "INVALIDATED", "reason": "Invalid Risk Distance"}
 
-                    tp_price = entry_price - (risk * self.rr_ratio)
-                    
                     return {
                         "signal": "SELL_ENTRY",
                         "entry_time": row['time'],
                         "entry_price": entry_price,
                         "sl_price": sl_price,
-                        "tp_price": tp_price,
-                        "risk_points": risk,
-                        "entry_tf": entry_ob['tf'],
-                        "sl_tf": outer_ob['tf']
+                        "tp_price": entry_price - (risk * self.rr_ratio)
                     }
 
-        return {"signal": "WAITING_FOR_TRIGGER", "reason": "Conditions met, waiting for trigger"}
+        return {"signal": "WAITING_FOR_TRIGGER", "reason": "Waiting for trigger"}
 
 # =====================================================================
 # ORDER EXECUTION ENGINE
@@ -233,7 +205,7 @@ def execute_trade(side, entry_price, sl_price, tp_price):
 
     exit_side = "SELL" if side == "BUY" else "BUY"
 
-    # BTCUSDT साठी १ दशांश स्थळ (1 Decimal Place Precision)
+    # BTCUSDT Precision (1 Decimal Place)
     sl_formatted = f"{round(sl_price, 1):.1f}"
     tp_formatted = f"{round(tp_price, 1):.1f}"
 
@@ -245,15 +217,11 @@ def execute_trade(side, entry_price, sl_price, tp_price):
 
     # 1. Market Entry Order
     market_order = send_signed_request("POST", "/fapi/v1/order", {
-        "symbol": SYMBOL,
-        "side": side,
-        "type": "MARKET",
-        "quantity": qty
+        "symbol": SYMBOL, "side": side, "type": "MARKET", "quantity": qty
     })
     print("📌 Market Order Result:", market_order)
 
-    # थोडे थांबून (0.5 sec) SL/TP ऑर्डर्स पाठवणे जेणेकरून एंट्री प्राईस कन्फर्म होईल
-    time.sleep(0.5)
+    time.sleep(1.0)
 
     # 2. Stop Loss Order
     sl_order = send_signed_request("POST", "/fapi/v1/order", {
@@ -276,24 +244,21 @@ def execute_trade(side, entry_price, sl_price, tp_price):
         "workingType": "MARK_PRICE"
     })
     print("🎯 Take Profit Order Result:", tp_order)
+
 # =====================================================================
 # MAIN RUNNER
 # =====================================================================
 print(f"🤖 SMC Order Flow Trading Bot Running for {SYMBOL}...")
 
 try:
-    if has_open_position():
-        print("⚠️ Active trade already open on Binance. Skipping new entry to protect risk.")
+    open_pos_count = get_open_positions_count()
+    if open_pos_count >= MAX_OPEN_POSITIONS:
+        print(f"⚠️ Max open positions limit reached ({open_pos_count}/{MAX_OPEN_POSITIONS}). Skipping trade.")
     else:
-        # 1. Fetch Auto LTF Order Blocks
         bullish_obs, bearish_obs = auto_detect_ltf_obs(['15m', '5m', '3m'])
-        
-        # 2. Fetch 3m Trigger Candles
         df_3m = get_klines('3m', limit=20)
         
         engine = SMCStrategyEngine(rr_ratio=RR_RATIO)
-        
-        # 3. Evaluate Buy and Sell Setups
         buy_res = engine.evaluate_buy_setup(df_3m, bullish_obs)
         sell_res = engine.evaluate_sell_setup(df_3m, bearish_obs)
 
@@ -306,8 +271,7 @@ try:
             execute_trade("SELL", sell_res['entry_price'], sell_res['sl_price'], sell_res['tp_price'])
 
         else:
-            current_close = df_3m.iloc[-1]['Close']
-            print(f"⏳ Market Checked (Price: {current_close}). Buy: {buy_res['signal']} | Sell: {sell_res['signal']}")
+            print(f"⏳ Market Checked. Buy: {buy_res['signal']} | Sell: {sell_res['signal']}")
 
 except Exception as e:
     print("❌ Strategy Execution Error:", str(e))

@@ -215,16 +215,19 @@ def execute_trade(side, entry_price, sl_price, tp_price):
     print(f"  Stop Loss: {sl_formatted}")
     print(f"  Take Profit (1:2 RR): {tp_formatted}")
 
-    # 1. Market Entry Order
+    # 1. Market Entry Order (Standard Endpoint)
     market_order = send_signed_request("POST", "/fapi/v1/order", {
-        "symbol": SYMBOL, "side": side, "type": "MARKET", "quantity": qty
+        "symbol": SYMBOL,
+        "side": side,
+        "type": "MARKET",
+        "quantity": qty
     })
     print("📌 Market Order Result:", market_order)
 
     time.sleep(1.0)
 
-    # 2. Stop Loss Order
-    sl_order = send_signed_request("POST", "/fapi/v1/order", {
+    # 2. Stop Loss Order (Updated to Binance Algo Order Endpoint)
+    sl_order = send_signed_request("POST", "/fapi/v1/algo/order", {
         "symbol": SYMBOL,
         "side": exit_side,
         "type": "STOP_MARKET",
@@ -234,8 +237,8 @@ def execute_trade(side, entry_price, sl_price, tp_price):
     })
     print("🛡️ Stop Loss Order Result:", sl_order)
 
-    # 3. Take Profit Order
-    tp_order = send_signed_request("POST", "/fapi/v1/order", {
+    # 3. Take Profit Order (Updated to Binance Algo Order Endpoint)
+    tp_order = send_signed_request("POST", "/fapi/v1/algo/order", {
         "symbol": SYMBOL,
         "side": exit_side,
         "type": "TAKE_PROFIT_MARKET",
